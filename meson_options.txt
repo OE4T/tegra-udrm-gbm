@@ -1,0 +1,6 @@
+option(
+    'gbm-backends-path',
+    type : 'string',
+    value : '',
+    description : 'Installation path for mesa gbm backends. Default $libdir/gbm'
+)
