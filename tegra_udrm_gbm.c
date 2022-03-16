@@ -428,12 +428,14 @@ gbm_tudrm_surface_create(struct gbm_device *gbm,
         return NULL;
     }
 
-    surf->base.v0.count = count;
-    memcpy(surf->base.v0.modifiers, modifiers, count * sizeof(*modifiers));
-
-    // for (int i = 0; i < count; i++) {
-    //     surf->base.v0.modifiers[i] &= ~NV_MODIFIER_MASK;
-    // }
+    uint64_t *v0_modifiers = surf->base.v0.modifiers;
+    for (int i = 0; i < count; i++) {
+        // compressed buffers don't render correctly when imported
+        if (modifiers[i] & ~DRM_FORMAT_MOD_NVIDIA_BLOCK_LINEAR_2D(0x0, 0x1, 0x3, 0xff, 0xf))
+            continue;
+        *v0_modifiers++ = modifiers[i];
+    }
+    surf->base.v0.count = v0_modifiers - surf->base.v0.modifiers;
 
     return &surf->base;
 
