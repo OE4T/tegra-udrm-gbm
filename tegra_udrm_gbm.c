@@ -45,7 +45,6 @@
 static void *libnvgbm;
 
 #define NVGBM_FUNC(F) typedef __typeof__(F) F##_t; F##_t *F = dlsym(libnvgbm, #F);
-#define NV_MODIFIER_MASK (0x300000000000000)
 
 static uint32_t
 format_canonicalize(uint32_t gbm_format)
@@ -267,7 +266,7 @@ gbm_tudrm_bo_create(struct gbm_device *gbm,
         }
 
         for (int i = 0; i < count; i++) {
-            modifiers[i] = _modifiers[i] & ~NV_MODIFIER_MASK;
+            modifiers[i] = _modifiers[i] & ~fourcc_mod_code(NVIDIA, 0);
         }
 
         nvgbm_bo = gbm_bo_create_with_modifiers(dri->nvgbm_device, width, height, format, modifiers, count);
