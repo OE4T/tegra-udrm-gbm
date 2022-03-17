@@ -25,6 +25,7 @@
 #define _GBM_TUDRM_INTERNAL_H_
 
 #include "gbmint.h"
+#include <stddef.h>
 
 #define ALIGN(val, align) (((val) + (align) - 1) & ~((align) - 1))
 
@@ -49,6 +50,7 @@ struct gbm_tudrm_bo {
 };
 
 struct gbm_tudrm_surface {
+   void *reserved_for_egl_gbm;
    struct gbm_surface base;
    struct gbm_surface *nvgbm_surface;
 };
@@ -68,7 +70,7 @@ gbm_tudrm_bo(struct gbm_bo *bo)
 static inline struct gbm_tudrm_surface *
 gbm_tudrm_surface(struct gbm_surface *surface)
 {
-   return (struct gbm_tudrm_surface *) surface;
+   return (struct gbm_tudrm_surface *)((char *)surface - offsetof(struct gbm_tudrm_surface, base));
 }
 
 #endif
