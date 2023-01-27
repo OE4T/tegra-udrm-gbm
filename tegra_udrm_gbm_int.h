@@ -35,24 +35,24 @@
 
 struct gbm_tudrm_device {
    struct gbm_device base;
-   struct gbm_device *nvgbm_device;
 };
 
 struct gbm_tudrm_bo_data {
     int dmabuf_fd;
     uint64_t modifier;
+    /* Used for cursors and the swrast front BO */
+    uint32_t handle, size;
+    void *map;
 };
 
 struct gbm_tudrm_bo {
     struct gbm_bo base;
-    struct gbm_bo *nvgbm_bo;
     struct gbm_tudrm_bo_data data;
 };
 
 struct gbm_tudrm_surface {
    void *reserved_for_egl_gbm;
    struct gbm_surface base;
-   struct gbm_surface *nvgbm_surface;
 };
 
 static inline struct gbm_tudrm_device *

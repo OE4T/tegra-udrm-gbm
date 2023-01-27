@@ -31,6 +31,7 @@
 #include <limits.h>
 #include <assert.h>
 #include <dlfcn.h>
+#include <fcntl.h>
 
 #include <sys/types.h>
 #include <unistd.h>
@@ -41,10 +42,6 @@
 
 #include "gbm.h"
 #include "tegra_udrm_gbm_int.h"
-
-static void *libnvgbm;
-
-#define NVGBM_FUNC(F) typedef __typeof__(F) F##_t; F##_t *F = dlsym(libnvgbm, #F);
 
 static uint32_t
 format_canonicalize(uint32_t gbm_format)
@@ -64,9 +61,15 @@ gbm_tudrm_is_format_supported(struct gbm_device *gbm,
                               uint32_t format,
                               uint32_t usage)
 {
-    NVGBM_FUNC(gbm_device_is_format_supported)
-    struct gbm_tudrm_device *dri = gbm_tudrm_device(gbm);
-    return gbm_device_is_format_supported(dri->nvgbm_device, format, usage);
+    switch (format) {
+    case GBM_FORMAT_XRGB8888:
+    case GBM_FORMAT_ARGB8888:
+    case GBM_FORMAT_XBGR8888:
+    case GBM_FORMAT_ABGR8888:
+        return 1;
+    default:
+        return 0;
+    }
 }
 
 static int
@@ -74,21 +77,14 @@ gbm_tudrm_get_format_modifier_plane_count(struct gbm_device *gbm,
                                           uint32_t format,
                                           uint64_t modifier)
 {
-    NVGBM_FUNC(gbm_device_get_format_modifier_plane_count)
-    struct gbm_tudrm_device *dri = gbm_tudrm_device(gbm);
-    return gbm_device_get_format_modifier_plane_count(dri->nvgbm_device, format, modifier);
+    return 1;
 }
 
 static int
 gbm_tudrm_bo_write(struct gbm_bo *_bo, const void *buf, size_t count)
 {
     struct gbm_tudrm_bo *bo = gbm_tudrm_bo(_bo);
-    if (bo->nvgbm_bo) {
-        NVGBM_FUNC(gbm_bo_write)
-        return gbm_bo_write(bo->nvgbm_bo, buf, count);
-    } else {
-        return 0;
-    }
+    return 0;
 }
 
 static int
@@ -102,22 +98,13 @@ static int
 gbm_tudrm_bo_get_planes(struct gbm_bo *_bo)
 {
     struct gbm_tudrm_bo *bo = gbm_tudrm_bo(_bo);
-    if (bo->nvgbm_bo) {
-        NVGBM_FUNC(gbm_bo_get_plane_count)
-        return gbm_bo_get_plane_count(bo->nvgbm_bo);
-    } else {
-        return 1;
-    }
+    return 1;
 }
 
 static union gbm_bo_handle
 gbm_tudrm_bo_get_handle_for_plane(struct gbm_bo *_bo, int plane)
 {
     struct gbm_tudrm_bo *bo = gbm_tudrm_bo(_bo);
-    if (bo->nvgbm_bo) {
-        NVGBM_FUNC(gbm_bo_get_handle_for_plane)
-        return gbm_bo_get_handle_for_plane(bo->nvgbm_bo, plane);
-    }
     return bo->base.v0.handle;
 }
 
@@ -132,10 +119,6 @@ static uint32_t
 gbm_tudrm_bo_get_offset(struct gbm_bo *_bo, int plane)
 {
     struct gbm_tudrm_bo *bo = gbm_tudrm_bo(_bo);
-    if (bo->nvgbm_bo) {
-        NVGBM_FUNC(gbm_bo_get_offset)
-        return gbm_bo_get_offset(bo->nvgbm_bo, plane);
-    }
     return 0;
 }
 
@@ -153,7 +136,6 @@ gbm_tudrm_bo_import(struct gbm_device *gbm,
 
     struct gbm_tudrm_device *dri = gbm_tudrm_device(gbm);
     struct gbm_tudrm_bo *bo;
-    struct gbm_bo *nvgbm_bo;
 
     bo = calloc(1, sizeof *bo);
     if (bo == NULL) {
@@ -181,8 +163,7 @@ gbm_tudrm_bo_import(struct gbm_device *gbm,
         // TODO: more than one plane?
         ret = drmPrimeFDToHandle(dri->base.v0.fd, dmabuf_fd, &handle);
         if (ret < 0) {
-            free(bo);
-            return NULL;
+            goto fail;
         }
 
         bo->base.v0.handle.u32 = handle;
@@ -203,8 +184,7 @@ gbm_tudrm_bo_import(struct gbm_device *gbm,
 
         ret = drmPrimeFDToHandle(dri->base.v0.fd, dmabuf_fd, &handle);
         if (ret < 0) {
-            free(bo);
-            return NULL;
+            goto fail;
         }
 
         bo->base.v0.handle.u32 = handle;
@@ -215,30 +195,42 @@ gbm_tudrm_bo_import(struct gbm_device *gbm,
         bo->data.dmabuf_fd = fd_data->fd;
 
     } else {
-        NVGBM_FUNC(gbm_bo_import)
-        NVGBM_FUNC(gbm_bo_get_width)
-        NVGBM_FUNC(gbm_bo_get_height)
-        NVGBM_FUNC(gbm_bo_get_format)
-        NVGBM_FUNC(gbm_bo_get_handle)
-        NVGBM_FUNC(gbm_bo_get_stride)
-
-        nvgbm_bo = gbm_bo_import(dri->nvgbm_device, type, buffer, usage);
-
-        if (!nvgbm_bo) {
-            free(bo);
-            return NULL;
-        }
-
-        bo->nvgbm_bo = nvgbm_bo;
-
-        bo->base.v0.width = gbm_bo_get_width(nvgbm_bo);
-        bo->base.v0.height = gbm_bo_get_height(nvgbm_bo);
-        bo->base.v0.format = gbm_bo_get_format(nvgbm_bo);
-        bo->base.v0.handle = gbm_bo_get_handle(nvgbm_bo);
-        bo->base.v0.stride = gbm_bo_get_stride(nvgbm_bo);
+        // TODO: maybe GBM_BO_IMPORT_EGL_IMAGE
+        // or GBM_BO_IMPORT_WL_BUFFER?
+        goto fail;
     }
 
     return &bo->base;
+
+fail:
+    free(bo);
+    return NULL;
+}
+
+static inline void *
+gbm_tudrm_bo_map_dumb(struct gbm_tudrm_device *dri, struct gbm_tudrm_bo *bo)
+{
+   struct drm_mode_map_dumb map_arg;
+   int ret;
+
+   if (bo->data.map != NULL)
+      return bo->data.map;
+
+   memset(&map_arg, 0, sizeof(map_arg));
+   map_arg.handle = bo->data.handle;
+
+   ret = drmIoctl(dri->base.v0.fd, DRM_IOCTL_MODE_MAP_DUMB, &map_arg);
+   if (ret)
+      return NULL;
+
+   bo->data.map = mmap(NULL, bo->data.size, PROT_WRITE,
+                  MAP_SHARED, dri->base.v0.fd, map_arg.offset);
+   if (bo->data.map == MAP_FAILED) {
+      bo->data.map = NULL;
+      return NULL;
+   }
+
+   return bo->data.map;
 }
 
 static struct gbm_bo *
@@ -248,57 +240,71 @@ gbm_tudrm_bo_create(struct gbm_device *gbm,
                   const uint64_t *_modifiers,
                   const unsigned int count)
 {
-    NVGBM_FUNC(gbm_bo_destroy)
-    NVGBM_FUNC(gbm_bo_get_stride)
-    NVGBM_FUNC(gbm_bo_get_handle)
-    NVGBM_FUNC(gbm_bo_get_fd)
-
     struct gbm_tudrm_device *dri = gbm_tudrm_device(gbm);
     struct gbm_tudrm_bo *bo;
-    struct gbm_bo *nvgbm_bo;
-
-    if (_modifiers && count) {
-        NVGBM_FUNC(gbm_bo_create_with_modifiers)
-
-        uint64_t *modifiers = calloc(count, sizeof(uint64_t));
-        if (!modifiers) {
-            return NULL;
-        }
-
-        for (int i = 0; i < count; i++) {
-            modifiers[i] = _modifiers[i] & ~fourcc_mod_code(NVIDIA, 0);
-        }
-
-        nvgbm_bo = gbm_bo_create_with_modifiers(dri->nvgbm_device, width, height, format, modifiers, count);
-
-        free(modifiers);
-    } else {
-        NVGBM_FUNC(gbm_bo_create)
-
-        nvgbm_bo = gbm_bo_create(dri->nvgbm_device, width, height, format, usage);
-    }
-
-    if (!nvgbm_bo) {
-        return NULL;
-    }
 
     bo = calloc(1, sizeof *bo);
     if (bo == NULL) {
-        gbm_bo_destroy(nvgbm_bo);
         errno = ENOMEM;
         return NULL;
     }
-
-    bo->nvgbm_bo = nvgbm_bo;
 
     bo->base.gbm = gbm;
     bo->base.v0.width = width;
     bo->base.v0.height = height;
     bo->base.v0.format = format_canonicalize(format);
-    bo->base.v0.handle = gbm_bo_get_handle(nvgbm_bo);
-    bo->base.v0.stride = gbm_bo_get_stride(nvgbm_bo);
-    bo->data.dmabuf_fd = gbm_bo_get_fd(nvgbm_bo);
     bo->data.modifier = (count && _modifiers) ? _modifiers[0] : 0;
+
+    if (usage & GBM_BO_USE_WRITE) {
+        struct drm_mode_create_dumb create_arg;
+        int ret;
+
+        memset(&create_arg, 0, sizeof(create_arg));
+        create_arg.bpp = 32;
+        create_arg.width = width;
+        create_arg.height = height;
+
+        ret = drmIoctl(dri->base.v0.fd, DRM_IOCTL_MODE_CREATE_DUMB, &create_arg);
+        if (ret) {
+            free(bo);
+            return NULL;
+        }
+
+        bo->base.v0.stride = create_arg.pitch;
+        bo->base.v0.format = format;
+        bo->base.v0.handle.u32 = create_arg.handle;
+        bo->data.handle = create_arg.handle;
+        bo->data.size = create_arg.size;
+
+        if (gbm_tudrm_bo_map_dumb(dri, bo) == NULL) {
+            struct drm_mode_destroy_dumb destroy_arg;
+            memset(&destroy_arg, 0, sizeof destroy_arg);
+            destroy_arg.handle = create_arg.handle;
+            drmIoctl(dri->base.v0.fd, DRM_IOCTL_MODE_DESTROY_DUMB, &destroy_arg);
+        }
+
+    } else {
+
+        // TODO: handle these cases:
+        /*
+
+        if (usage & GBM_BO_USE_SCANOUT)
+            dri_use |= __DRI_IMAGE_USE_SCANOUT;
+        if (usage & GBM_BO_USE_CURSOR)
+            dri_use |= __DRI_IMAGE_USE_CURSOR;
+        if (usage & GBM_BO_USE_LINEAR)
+            dri_use |= __DRI_IMAGE_USE_LINEAR;
+        if (usage & GBM_BO_USE_PROTECTED)
+            dri_use |= __DRI_IMAGE_USE_PROTECTED;
+        if (usage & GBM_BO_USE_FRONT_RENDERING)
+            dri_use |= __DRI_IMAGE_USE_FRONT_RENDERING;
+
+        see also gbm_dri_bo_create / loader_dri_create_image
+
+        */
+
+        return NULL;
+    }
 
     return &bo->base;
 }
@@ -307,10 +313,6 @@ static void
 gbm_tudrm_bo_destroy(struct gbm_bo *_bo)
 {
     struct gbm_tudrm_bo *bo = gbm_tudrm_bo(_bo);
-    if (bo->nvgbm_bo) {
-        NVGBM_FUNC(gbm_bo_destroy)
-        gbm_bo_destroy(bo->nvgbm_bo);
-    }
     free(bo);
 }
 
@@ -321,30 +323,34 @@ gbm_tudrm_bo_map(struct gbm_bo *_bo,
               uint32_t flags, uint32_t *stride, void **map_data)
 {
     struct gbm_tudrm_bo *bo = gbm_tudrm_bo(_bo);
-    if (bo->nvgbm_bo) {
-        NVGBM_FUNC(gbm_bo_map)
-        return gbm_bo_map(bo->nvgbm_bo, x, y, width, height, flags, stride, map_data);
-    } else {
-        return NULL;
+
+    /* If it's a dumb buffer, we already have a mapping */
+    if (bo->data.map) {
+        *map_data = (char *)bo->data.map + (bo->base.v0.stride * y) + (x * 4);
+        *stride = bo->base.v0.stride;
+        return *map_data;
     }
+
+    return NULL;
 }
 
 static void
 gbm_tudrm_bo_unmap(struct gbm_bo *_bo, void *map_data)
 {
     struct gbm_tudrm_bo *bo = gbm_tudrm_bo(_bo);
-    if (bo->nvgbm_bo) {
-        NVGBM_FUNC(gbm_bo_unmap)
-        gbm_bo_unmap(bo->nvgbm_bo, map_data);
+
+    /* Check if it's a dumb buffer and check the pointer is in range */
+    if (bo->data.map) {
+        assert(map_data >= bo->data.map);
+        assert(map_data < (bo->data.map + bo->data.size));
+        return;
     }
 }
 
 static void
 gbm_tudrm_surface_destroy(struct gbm_surface *_surf)
 {
-    // NVGBM_FUNC(gbm_surface_destroy)
     struct gbm_tudrm_surface *surf = gbm_tudrm_surface(_surf);
-    // gbm_surface_destroy(surf->nvgbm_surface);
     if (surf->base.v0.modifiers)
         free(surf->base.v0.modifiers);
     free(surf);
@@ -356,41 +362,6 @@ gbm_tudrm_surface_create(struct gbm_device *gbm,
                        uint32_t format, uint32_t flags,
                        const uint64_t *modifiers, const unsigned count)
 {
-#if 0
-    NVGBM_FUNC(gbm_surface_create_with_modifiers)
-    NVGBM_FUNC(gbm_surface_destroy)
-
-    struct gbm_tudrm_device *dri = gbm_tudrm_device(gbm);
-    struct gbm_tudrm_surface *surf;
-    struct gbm_surface *nvgbm_surface;
-
-    uint64_t *modifiers = calloc(count, sizeof(uint64_t));
-    if (!modifiers) {
-        return NULL;
-    }
-
-    for (int i = 0; i < count; i++) {
-        modifiers[i] = _modifiers[i] & ~NV_MODIFIER_MASK;
-    }
-
-    nvgbm_surface = gbm_surface_create_with_modifiers(dri->nvgbm_device, width, height, format, modifiers, count);
-    if (!nvgbm_surface) {
-        return NULL;
-    }
-
-    free(modifiers);
-
-    surf = calloc(1, sizeof *surf);
-    if (surf == NULL) {
-        gbm_surface_destroy(nvgbm_surface);
-        errno = ENOMEM;
-        return NULL;
-    }
-
-    surf->nvgbm_surface = nvgbm_surface;
-    return &surf->base;
-#else
-
     struct gbm_tudrm_device *dri = gbm_tudrm_device(gbm);
     struct gbm_tudrm_surface *surf;
 
@@ -438,16 +409,12 @@ gbm_tudrm_surface_create(struct gbm_device *gbm,
     surf->base.v0.count = v0_modifiers - surf->base.v0.modifiers;
 
     return &surf->base;
-
-#endif
 }
 
 static void
 gbm_tudrm_device_destroy(struct gbm_device *gbm)
 {
-    NVGBM_FUNC(gbm_device_destroy)
     struct gbm_tudrm_device *tudrm = gbm_tudrm_device(gbm);
-    gbm_device_destroy(tudrm->nvgbm_device);
     free(tudrm);
 }
 
@@ -455,30 +422,14 @@ static struct gbm_device *
 gbm_tudrm_device_create(int fd, uint32_t gbm_backend_version)
 {
     struct gbm_tudrm_device *tudrm;
-    struct gbm_device *nvgbm_device;
-
-    libnvgbm = dlopen("libnvgbm.so", RTLD_NOW);
-    if (!libnvgbm) {
-        errno = ENODEV;
-        return NULL;
-    }
-
-    NVGBM_FUNC(gbm_create_device)
-    NVGBM_FUNC(gbm_device_destroy)
 
     if (gbm_backend_version != GBM_BACKEND_ABI_VERSION) {
         errno = EINVAL;
         return NULL;
     }
 
-    nvgbm_device = gbm_create_device(fd);
-    if (!nvgbm_device) {
-        return NULL;
-    }
-
     tudrm = calloc(1, sizeof *tudrm);
     if (!tudrm) {
-        gbm_device_destroy(nvgbm_device);
         errno = ENOMEM;
         return NULL;
     }
@@ -516,8 +467,6 @@ gbm_tudrm_device_create(int fd, uint32_t gbm_backend_version)
    dri->base.v0.surface_destroy = gbm_dri_surface_destroy;
 
 */
-
-    tudrm->nvgbm_device = nvgbm_device;
 
     return &tudrm->base;
 }
