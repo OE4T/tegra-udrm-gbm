@@ -389,6 +389,12 @@ gbm_tudrm_surface_create(struct gbm_device *gbm,
     surf->base.v0.flags = flags;
     if (!modifiers) {
         assert(!count);
+        // if the buffer is being used for scanout, make sure it's linear
+        if (flags & GBM_BO_USE_SCANOUT) {
+            surf->base.v0.modifiers = calloc(count, sizeof(uint64_t));
+            surf->base.v0.modifiers[0] = DRM_FORMAT_MOD_LINEAR;
+            surf->base.v0.count = 1;
+        }
         return &surf->base;
     }
 
