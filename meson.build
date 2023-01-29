@@ -21,8 +21,11 @@ project_source_files = [
 
 cc = meson.get_compiler('c')
 
+nvbufsurface_dep = cc.find_library('nvbufsurface', required : true)
+
 project_dependencies = [
   dependency('libdrm'),
+  nvbufsurface_dep,
   dependency('gbm', version : ['>=21.2.0'])
 ]
 

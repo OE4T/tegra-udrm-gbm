@@ -40,6 +40,8 @@
 #include <xf86drm.h>
 #include <drm_fourcc.h>
 
+#include <nvbufsurface.h>
+
 #include "gbm.h"
 #include "tegra_udrm_gbm_int.h"
 
@@ -84,6 +86,16 @@ static int
 gbm_tudrm_bo_write(struct gbm_bo *_bo, const void *buf, size_t count)
 {
     struct gbm_tudrm_bo *bo = gbm_tudrm_bo(_bo);
+
+    // TODO: for bo->data.surface: Raw2NvBufSurface
+
+    if (bo->data.dmabuf_fd != NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    memcpy(bo->data.map, buf, count);
+
     return 0;
 }
 
@@ -266,8 +278,7 @@ gbm_tudrm_bo_create(struct gbm_device *gbm,
 
         ret = drmIoctl(dri->base.v0.fd, DRM_IOCTL_MODE_CREATE_DUMB, &create_arg);
         if (ret) {
-            free(bo);
-            return NULL;
+            goto fail;
         }
 
         bo->base.v0.stride = create_arg.pitch;
@@ -284,35 +295,79 @@ gbm_tudrm_bo_create(struct gbm_device *gbm,
         }
 
     } else {
+        int ret;
+        NvBufSurfaceAllocateParams args;
 
-        // TODO: handle these cases:
         /*
+        TODO: what to do with these cases:
 
-        if (usage & GBM_BO_USE_SCANOUT)
-            dri_use |= __DRI_IMAGE_USE_SCANOUT;
-        if (usage & GBM_BO_USE_CURSOR)
-            dri_use |= __DRI_IMAGE_USE_CURSOR;
-        if (usage & GBM_BO_USE_LINEAR)
-            dri_use |= __DRI_IMAGE_USE_LINEAR;
-        if (usage & GBM_BO_USE_PROTECTED)
-            dri_use |= __DRI_IMAGE_USE_PROTECTED;
-        if (usage & GBM_BO_USE_FRONT_RENDERING)
-            dri_use |= __DRI_IMAGE_USE_FRONT_RENDERING;
-
-        see also gbm_dri_bo_create / loader_dri_create_image
-
+        GBM_BO_USE_RENDERING
+        GBM_BO_USE_FRONT_RENDERING
         */
 
-        return NULL;
+        memset(&args, 0, sizeof(args));
+
+        args.params.width = width;
+        args.params.height = height;
+        args.params.memType = NVBUF_MEM_SURFACE_ARRAY;
+        if (usage & (GBM_BO_USE_LINEAR | GBM_BO_USE_SCANOUT | GBM_BO_USE_CURSOR))
+            args.params.layout = NVBUF_LAYOUT_PITCH;
+        else
+            args.params.layout = NVBUF_LAYOUT_BLOCK_LINEAR;
+        switch(format_canonicalize(format)) {
+        case GBM_FORMAT_ARGB8888:
+            args.params.colorFormat = NVBUF_COLOR_FORMAT_ARGB;
+            break;
+        case GBM_FORMAT_XRGB8888:
+            args.params.colorFormat = NVBUF_COLOR_FORMAT_xRGB;
+            break;
+        case GBM_FORMAT_ABGR8888:
+            args.params.colorFormat = NVBUF_COLOR_FORMAT_ABGR;
+            break;
+        case GBM_FORMAT_XBGR8888:
+            args.params.colorFormat = NVBUF_COLOR_FORMAT_xBGR;
+            break;
+        default:
+            goto fail;
+        }
+        args.memtag = ((usage & GBM_BO_USE_PROTECTED) ? NvBufSurfaceTag_PROTECTED : NvBufSurfaceTag_NONE);
+
+        ret = NvBufSurfaceAllocate(&bo->data.surface, 1, &args);
+        if (ret < 0) {
+            goto fail;
+        }
+
+        NvBufSurfaceParams *params = &bo->data.surface->surfaceList[0];
+
+        int fd = params->bufferDesc;
+        int pitch = params->planeParams.pitch[0];
+        uint32_t handle = 0;
+
+        ret = drmPrimeFDToHandle(dri->base.v0.fd, fd, &handle);
+        if (ret < 0) {
+            goto fail;
+        }
+
+        bo->base.v0.handle.u32 = handle;
+        bo->base.v0.stride = pitch;
+        bo->data.dmabuf_fd = fd;
     }
 
     return &bo->base;
+
+fail:
+    if (bo->data.surface)
+        NvBufSurfaceDestroy(bo->data.surface);
+    free(bo);
+    return NULL;
 }
 
 static void
 gbm_tudrm_bo_destroy(struct gbm_bo *_bo)
 {
     struct gbm_tudrm_bo *bo = gbm_tudrm_bo(_bo);
+    if (bo->data.surface)
+        NvBufSurfaceDestroy(bo->data.surface);
     free(bo);
 }
 
@@ -331,6 +386,15 @@ gbm_tudrm_bo_map(struct gbm_bo *_bo,
         return *map_data;
     }
 
+    if (bo->data.surface) {
+        NvBufSurface *surf = bo->data.surface;
+        int pitch = surf->surfaceList->planeParams.pitch[0];
+        NvBufSurfaceMap(surf, 0, 0, NVBUF_MAP_READ_WRITE);
+        *map_data = surf->surfaceList->mappedAddr.addr + (pitch * y) + (x * 4);
+        *stride = pitch;
+        return *map_data;
+    }
+
     return NULL;
 }
 
@@ -343,6 +407,11 @@ gbm_tudrm_bo_unmap(struct gbm_bo *_bo, void *map_data)
     if (bo->data.map) {
         assert(map_data >= bo->data.map);
         assert(map_data < (bo->data.map + bo->data.size));
+        return;
+    }
+
+    if (bo->data.surface) {
+        NvBufSurfaceUnMap(bo->data.surface, 0, 0);
         return;
     }
 }
