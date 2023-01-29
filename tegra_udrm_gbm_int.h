@@ -26,6 +26,7 @@
 
 #include "gbmint.h"
 #include <stddef.h>
+#include <nvbufsurface.h>
 
 #define ALIGN(val, align) (((val) + (align) - 1) & ~((align) - 1))
 
@@ -43,6 +44,8 @@ struct gbm_tudrm_bo_data {
     /* Used for cursors and the swrast front BO */
     uint32_t handle, size;
     void *map;
+    /* for created buffers */
+    NvBufSurface *surface;
 };
 
 struct gbm_tudrm_bo {
