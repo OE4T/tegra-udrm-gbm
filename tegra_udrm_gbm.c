@@ -510,7 +510,7 @@ gbm_tudrm_device_create(int fd, uint32_t gbm_backend_version)
     }
 
     tudrm->base.v0.backend_version = GBM_BACKEND_ABI_VERSION;
-    tudrm->base.v0.name = "tegra-udrm";
+    tudrm->base.v0.name = "nvidia";
     tudrm->base.v0.fd = fd;
     tudrm->base.v0.destroy = gbm_tudrm_device_destroy;
     tudrm->base.v0.is_format_supported = gbm_tudrm_is_format_supported;
